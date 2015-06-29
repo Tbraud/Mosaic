@@ -30,7 +30,15 @@ def getScreenInfo(windowid):
 	return width,height,depth
 
 def initlist():
-    path="/home/tristan/dev/dev_perso/crawlur/Pics/"
+    filename = os.path.expanduser("~/.xscreensaver")
+    f=open(filename,"r")
+    path=""
+    for line in f:
+        if "imageDirectory" in line:
+            line2=line.split()
+            path=line2[1]
+    if not (os.path.isfile(path) or os.path.isdir(path)):
+        path="./Pics"
     mimetypes.init()
     imglist=[]
     for dirpath, dirnames, files in os.walk(path):

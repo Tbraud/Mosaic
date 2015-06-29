@@ -11,13 +11,13 @@ in a given folder
 How
 ---
 
-Path is hardcoded (todo).
 
 Make script executable
 
 >chmod +x mosaic_screensaver.py
 
-Add the following line to your ~/.xscreensaver in the section programs
+Add the following line to your ~/.xscreensaver in the section "programs"
 
 >programs:
+
 >/path/to/mosaic_screensaver.py --root \n\
