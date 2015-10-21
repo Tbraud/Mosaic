@@ -23,7 +23,7 @@ from subprocess import Popen,PIPE
 import signal
 import multiprocessing
 from multiprocessing import Process, Queue
-
+import fcntl
 
 def getScreenInfo(windowid):
 	ret=Popen(['/usr/bin/xwininfo','-id',windowid],stdout=PIPE).communicate()[0]
@@ -113,55 +113,80 @@ def initcontainers(coef):
     return containers
 
 
-def mosaic(imglist,containers,width,height,coef):
+def mosaic(imglist,containers,width,height,coef,q,qmsg):
     # It's the worker process, we define the sigterm handler
     signal.signal(signal.SIGTERM , sigterm_handler)
     # Main loop
     while True:
-        # pick a random container to put the image in
-        it2=random.randint(0,len(containers)-1)
-        cont=containers[it2]
-        posx=cont[0][0]*width/coef
-        posy=cont[0][1]*height/coef
-        lenx=cont[1][0]*width/coef
-        leny=cont[1][1]*height/coef
+        message=qmsg.get()
+        if message=="image":
+            print "begin"
+            it2=random.randint(0,len(containers)-1)
+            cont=containers[it2]
+            posx=cont[0][0]*width/coef
+            posy=cont[0][1]*height/coef
+            lenx=cont[1][0]*width/coef
+            leny=cont[1][1]*height/coef
 
-        # pick a random image and load it
-        imgsizex=0;imgsizey=0;
-        # We check that the image is not too small (which would make it ugly
-        # when resizing)
-        while imgsizex<lenx or imgsizey<leny:
-            it=random.randint(0, len(imglist)-1)
-            img = pygame.image.load(imglist[it]).convert()
-            imgsizex,imgsizey= img.get_rect().size
+            # pick a random image and load it
+            imgsizex=0;imgsizey=0;
+            # We check that the image is not too small (which would make it ugly
+            # when resizing)
+            while imgsizex<lenx or imgsizey<leny:
+                it=random.randint(0, len(imglist)-1)
+                img = pygame.image.load(imglist[it]).convert()
+                imgsizex,imgsizey= img.get_rect().size
 
+            print "middle"
+            # Select how we will crop the image (according to its size ratio)
+            coefx=imgsizex/lenx
+            coefy=imgsizey/leny
+            if coefx>coefy:
+                img=img.subsurface(imgsizex/2-imgsizex/coefx/2,0,imgsizex/2+imgsizex/coefx/2,imgsizey)
+            else:
+                img=img.subsurface(0,imgsizey/2-imgsizey/coefy/2,imgsizex,imgsizey/2+imgsizey/coefy/2)
 
-        # Select how we will crop the image (according to its size ratio)
-        coefx=imgsizex/lenx
-        coefy=imgsizey/leny
-        if coefx>coefy:
-            img=img.subsurface(imgsizex/2-imgsizex/coefx/2,0,imgsizex/2+imgsizex/coefx/2,imgsizey)
+            # Scale the cropped image to the surface
+            img = pygame.transform.scale(img,(lenx,leny))
+            q.put((pygame.image.tostring(img,"RGB"),posx,posy,lenx,leny))
+            print "end"
+        elif message=="quit":
+            print "closed process"
+            q.close()
+            q.cancel_join_thread()
+            break
         else:
-            img=img.subsurface(0,imgsizey/2-imgsizey/coefy/2,imgsizex,imgsizey/2+imgsizey/coefy/2)
+            raise ValueError
 
-        # Scale the cropped image to the surface
-        img = pygame.transform.scale(img,(lenx,leny))
-        q.put((pygame.image.tostring(img,"RGB"),posx,posy,lenx,leny))
-
-def draw(screen,img,posx,posy):
+def draw(screen,q,qmsg):
+    imgstr,posx,posy,lenx,leny=q.get()
+    img=pygame.image.frombuffer( imgstr, (lenx,leny), 'RGB' )
+    qmsg.put("image")
+    pygame.time.wait(1000) 
     screen.blit(img, (posx, posy))
     pygame.display.flip()
 
+
 def main():
+    pid_file = 'program.pid'
+    fp = open(pid_file, 'w')
+    try:
+        fcntl.lockf(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        # another instance is running
+        sys.exit(0)
     imglist=initlist()
     screen,width,height=initscreen()
     coef=4
     cont=initcontainers(coef)
     counter=0
     # Worker process : loads and resizes images
-    p=[Process(target=mosaic, args=(imglist,cont,width,height,coef)) \
-            for i in range(multiprocessing.cpu_count()-1)]
+    p=[Process(target=mosaic, args=(imglist,cont,width,height,coef,q,qmsg)) \
+            for i in range(max(multiprocessing.cpu_count()-1,1))]
+
     [proc.start() for proc in p]
+    for i in range(7):
+        qmsg.put("image")
     while True:
         # Operations needed for changing containers over time
         counter+=1
@@ -169,24 +194,26 @@ def main():
             counter=0
             cont=initcontainers(coef)
         # Get processed image
-        imglist,posx,posy,lenx,leny=q.get()
-        img=pygame.image.frombuffer( imglist, (lenx,leny), 'RGB' )
+        draw(screen,q,qmsg)
         for event in pygame.event.get():
             if event.type in [pygame.QUIT, pygame.KEYUP]:
-                [proc.terminate() for proc in p]
+                [qmsg.put("quit") for proc in p]
+                print "closed" 
                 pygame.quit()
                 sys.exit()
-        pygame.time.wait(1000) 
-        draw(screen,img,posx,posy)
+
 
 
 def sigterm_handler(_signo, _stack_frame):
     # Don't wait for the queue to be empty to close process
+    q.close()
     q.cancel_join_thread()
+    print "kill"
     # Exit gracefully
     sys.exit(0)
 
 if __name__=='__main__':
     # The queue used for sharing images among processes
-    q = Queue(maxsize=10)
-    main()
+        q = Queue()
+        qmsg = Queue()
+        main()
