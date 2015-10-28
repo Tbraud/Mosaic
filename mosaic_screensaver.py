@@ -21,8 +21,11 @@ import mimetypes
 import random
 from subprocess import Popen,PIPE
 import signal
-import multiprocessing
-from multiprocessing import Process, Queue
+#import multiprocessing
+#from multiprocessing import Process, Queue
+import threading
+#from threading import Queue
+from Queue import Queue
 import fcntl
 
 def getScreenInfo(windowid):
@@ -115,7 +118,6 @@ def initcontainers(coef):
 
 def mosaic(imglist,containers,width,height,coef,q,qmsg):
     # It's the worker process, we define the sigterm handler
-    signal.signal(signal.SIGTERM , sigterm_handler)
     # Main loop
     while True:
         message=qmsg.get()
@@ -151,9 +153,6 @@ def mosaic(imglist,containers,width,height,coef,q,qmsg):
             q.put((pygame.image.tostring(img,"RGB"),posx,posy,lenx,leny))
             print "end"
         elif message=="quit":
-            print "closed process"
-            q.close()
-            q.cancel_join_thread()
             break
         else:
             raise ValueError
@@ -168,23 +167,19 @@ def draw(screen,q,qmsg):
 
 
 def main():
-    pid_file = 'program.pid'
-    fp = open(pid_file, 'w')
-    try:
-        fcntl.lockf(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except IOError:
-        # another instance is running
-        sys.exit(0)
     imglist=initlist()
     screen,width,height=initscreen()
     coef=4
     cont=initcontainers(coef)
     counter=0
     # Worker process : loads and resizes images
-    p=[Process(target=mosaic, args=(imglist,cont,width,height,coef,q,qmsg)) \
-            for i in range(max(multiprocessing.cpu_count()-1,1))]
+    #p=[Process(target=mosaic, args=(imglist,cont,width,height,coef,q,qmsg)) \
+    #        for i in range(max(multiprocessing.cpu_count()-1,1))]
+    t=threading.Thread(target=mosaic, args=(imglist,cont,width,height,coef,q,qmsg))
 
-    [proc.start() for proc in p]
+    thr=[]
+    thr.append(t)
+    [proc.start() for proc in thr]
     for i in range(7):
         qmsg.put("image")
     while True:
@@ -197,7 +192,7 @@ def main():
         draw(screen,q,qmsg)
         for event in pygame.event.get():
             if event.type in [pygame.QUIT, pygame.KEYUP]:
-                [qmsg.put("quit") for proc in p]
+                [qmsg.put("quit") for proc in thr]
                 print "closed" 
                 pygame.quit()
                 sys.exit()
