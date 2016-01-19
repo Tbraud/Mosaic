@@ -115,6 +115,44 @@ def initcontainers(coef):
         containers.append(cont)
     return containers
 
+def pickcont(containers,index=0):
+    if index==-1 or index>=len(containers):
+        return random.randint(0,len(containers)-1)
+    else:
+        return containers[index]
+
+def setimage(imglist,cont,width,height,coef):
+    lenx=cont[1][0]*width/coef
+    leny=cont[1][1]*height/coef
+
+    # pick a random image and load it
+    imgsizex=0;imgsizey=0;
+    # We check that the image is not too small (which would make it ugly
+    # when resizing)
+    while imgsizex<lenx or imgsizey<leny:
+        it=random.randint(0, len(imglist)-1)
+        img = pygame.image.load(imglist[it]).convert()
+        imgsizex,imgsizey= img.get_rect().size
+
+    print "middle"
+    # Select how we will crop the image (according to its size ratio)
+    coefx=imgsizex/lenx
+    coefy=imgsizey/leny
+    if coefx>coefy:
+        img=img.subsurface(imgsizex/2-imgsizex/coefx/2,0,imgsizex/2+imgsizex/coefx/2,imgsizey)
+    else:
+        img=img.subsurface(0,imgsizey/2-imgsizey/coefy/2,imgsizex,imgsizey/2+imgsizey/coefy/2)
+
+    # Scale the cropped image to the surface
+    img = pygame.transform.scale(img,(lenx,leny))
+    return img,lenx,leny
+
+def mosaic_first(imglist,containers,width,height,coef,q):
+    for cont in containers:
+            posx=cont[0][0]*width/coef
+            posy=cont[0][1]*height/coef
+            img,lenx,leny=setimage(imglist,cont,width,height,coef)
+            q.put((pygame.image.tostring(img,"RGB"),posx,posy,lenx,leny))
 
 def mosaic(imglist,containers,width,height,coef,q,qmsg):
     # It's the worker process, we define the sigterm handler
@@ -122,36 +160,12 @@ def mosaic(imglist,containers,width,height,coef,q,qmsg):
     while True:
         message=qmsg.get()
         if message=="image":
-            print "begin"
-            it2=random.randint(0,len(containers)-1)
+            it2=pickcont(containers,-1)
             cont=containers[it2]
             posx=cont[0][0]*width/coef
             posy=cont[0][1]*height/coef
-            lenx=cont[1][0]*width/coef
-            leny=cont[1][1]*height/coef
-
-            # pick a random image and load it
-            imgsizex=0;imgsizey=0;
-            # We check that the image is not too small (which would make it ugly
-            # when resizing)
-            while imgsizex<lenx or imgsizey<leny:
-                it=random.randint(0, len(imglist)-1)
-                img = pygame.image.load(imglist[it]).convert()
-                imgsizex,imgsizey= img.get_rect().size
-
-            print "middle"
-            # Select how we will crop the image (according to its size ratio)
-            coefx=imgsizex/lenx
-            coefy=imgsizey/leny
-            if coefx>coefy:
-                img=img.subsurface(imgsizex/2-imgsizex/coefx/2,0,imgsizex/2+imgsizex/coefx/2,imgsizey)
-            else:
-                img=img.subsurface(0,imgsizey/2-imgsizey/coefy/2,imgsizex,imgsizey/2+imgsizey/coefy/2)
-
-            # Scale the cropped image to the surface
-            img = pygame.transform.scale(img,(lenx,leny))
+            img,lenx,leny=setimage(imglist,cont,width,height,coef)
             q.put((pygame.image.tostring(img,"RGB"),posx,posy,lenx,leny))
-            print "end"
         elif message=="quit":
             break
         else:
@@ -161,10 +175,8 @@ def draw(screen,q,qmsg):
     imgstr,posx,posy,lenx,leny=q.get()
     img=pygame.image.frombuffer( imgstr, (lenx,leny), 'RGB' )
     qmsg.put("image")
-    pygame.time.wait(1000) 
     screen.blit(img, (posx, posy))
     pygame.display.flip()
-
 
 def main():
     imglist=initlist()
@@ -172,16 +184,14 @@ def main():
     coef=4
     cont=initcontainers(coef)
     counter=0
-    # Worker process : loads and resizes images
-    #p=[Process(target=mosaic, args=(imglist,cont,width,height,coef,q,qmsg)) \
-    #        for i in range(max(multiprocessing.cpu_count()-1,1))]
+    mosaic_first(imglist,cont,width,height,coef,q)
+    for c in cont:
+        draw(screen,q,qmsg)
     t=threading.Thread(target=mosaic, args=(imglist,cont,width,height,coef,q,qmsg))
 
     thr=[]
     thr.append(t)
     [proc.start() for proc in thr]
-    for i in range(7):
-        qmsg.put("image")
     while True:
         # Operations needed for changing containers over time
         counter+=1
@@ -190,6 +200,7 @@ def main():
             cont=initcontainers(coef)
         # Get processed image
         draw(screen,q,qmsg)
+        pygame.time.wait(2000) 
         for event in pygame.event.get():
             if event.type in [pygame.QUIT, pygame.KEYUP]:
                 [qmsg.put("quit") for proc in thr]
